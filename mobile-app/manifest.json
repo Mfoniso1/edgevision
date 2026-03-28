@@ -1,0 +1,18 @@
+{
+  "name": "EdgeVision Smart Security",
+  "short_name": "EdgeVision",
+  "start_url": "index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#ff4757",
+  "description": "Offline AI Security Monitor for Edge Devices",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

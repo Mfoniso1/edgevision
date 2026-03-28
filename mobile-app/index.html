@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EdgeVision | Smart Security</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        :root {
+            --primary: #ff4757;
+            --bg: #0f172a;
+            --glass: rgba(255, 255, 255, 0.05);
+            --border: rgba(255, 255, 255, 0.1);
+        }
+        body {
+            margin: 0;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #header {
+            width: 100%;
+            padding: 20px;
+            text-align: center;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+            z-index: 10;
+        }
+        h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.025em; color: var(--primary); }
+        #container {
+            position: relative;
+            width: 95vw;
+            max-width: 500px;
+            aspect-ratio: 1/1; /* Square for mobile UI */
+            border-radius: 24px;
+            border: 2px solid var(--border);
+            overflow: hidden;
+            background: #000;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #ui-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            pointer-events: none;
+            z-index: 20;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .stat-badge {
+            background: var(--glass);
+            backdrop-filter: blur(8px);
+            padding: 8px 16px;
+            border-radius: 999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            border: 1px solid var(--border);
+        }
+        #visitor-badge { color: #22c55e; }
+        #alert-text {
+            color: #ff4757;
+            font-weight: 900;
+            font-size: 2rem;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.2s;
+            text-shadow: 0 0 20px rgba(255, 71, 87, 0.5);
+        }
+        .detected #container {
+            border-color: var(--primary);
+            box-shadow: 0 0 30px rgba(255, 71, 87, 0.3);
+        }
+        .detected #alert-text { opacity: 1; }
+        
+        #controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+        }
+        button {
+            background: var(--glass);
+            border: 1px solid var(--border);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            backdrop-filter: blur(8px);
+        }
+        button:active { transform: scale(0.95); background: rgba(255,255,255,0.1); }
+        
+        #status-bar {
+            position: fixed;
+            bottom: 20px;
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <h1>EDGE VISION</h1>
+        <div style="font-size: 0.8rem; color: #94a3b8;">OFFLINE SHOP SECURITY</div>
+    </div>
+
+    <div id="container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+        <div id="ui-overlay">
+            <div class="stats">
+                <div class="stat-badge" id="fps-badge">FPS: --</div>
+                <div class="stat-badge" id="visitor-badge">VISITORS: 0</div>
+            </div>
+            <div id="alert-text">VISITOR!</div>
+            <div></div> <!-- Spacer -->
+        </div>
+    </div>
+
+    <div id="controls">
+        <button onclick="resetCounter()">Reset Counter</button>
+        <button onclick="toggleAudio()" id="audio-btn">Mute Audio</button>
+    </div>
+
+    <div id="status-bar">Engine: Initializing...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite/dist/tf-tflite.min.js"></script>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const container = document.body;
+        const alertText = document.getElementById('alert-text');
+        const statusBar = document.getElementById('status-bar');
+        const visitorBadge = document.getElementById('visitor-badge');
+        const fpsBadge = document.getElementById('fps-badge');
+        
+        let model;
+        let visitorCount = parseInt(localStorage.getItem('visitorCount')) || 0;
+        let isPersonPresent = false;
+        let personCooldown = 0;
+        let audioEnabled = true;
+        let lastTime = 0;
+
+        // Sound generator (Web Audio API)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playAlertSound() {
+            if (!audioEnabled) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 0.05);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        function updateVisitorUI() {
+            visitorBadge.innerText = `VISITORS: ${visitorCount}`;
+            localStorage.setItem('visitorCount', visitorCount);
+        }
+
+        function resetCounter() {
+            visitorCount = 0;
+            updateVisitorUI();
+        }
+
+        function toggleAudio() {
+            audioEnabled = !audioEnabled;
+            document.getElementById('audio-btn').innerText = audioEnabled ? "Mute Audio" : "Unmute Audio";
+        }
+
+        async function startApp() {
+            // Register Service Worker for Offline
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('sw.js').then(() => console.log("Offline Mode Ready"));
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment', width: 640, height: 640 } 
+                });
+                video.srcObject = stream;
+
+                statusBar.innerText = "Loading AI Core (3.4MB)...";
+                model = await tflite.loadTFLiteModel('./model/yolov8n_int8.tflite');
+                statusBar.innerText = "SECURITY ACTIVE ✅ (OFFLINE)";
+                
+                updateVisitorUI();
+                detect();
+            } catch (e) {
+                statusBar.innerText = "ERROR: Camera access denied.";
+                console.error(e);
+            }
+        }
+
+        async function detect() {
+            const startTime = performance.now();
+            
+            const input = tf.browser.fromPixels(video);
+            const resized = tf.image.resizeBilinear(input, [640, 640]);
+            const normalized = resized.div(255.0).expandDims(0);
+
+            const output = model.predict(normalized);
+            const data = await output.data();
+            
+            // YOLOv8 TFLite logic
+            // Class 0 = Person. We check for any box where class 0 probability > 0.5
+            let foundPerson = false;
+            
+            // Flexible parser for [1, 84, 8400] or [1, 8400, 84]
+            const numElements = data.length;
+            if (numElements === 84 * 8400) {
+                // Common Transposed format: [1, 84, 8400]
+                // Class 0 is starting at index 4 * 8400
+                const rowStart = 4 * 8400;
+                for (let j = 0; j < 8400; j++) {
+                    if (data[rowStart + j] > 0.55) {
+                        foundPerson = true;
+                        break;
+                    }
+                }
+            } else {
+                // Fallback for [1, 8400, 84] or small samples
+                for (let i = 0; i < data.length; i += 84) {
+                    if (data[i + 4] > 0.55) { foundPerson = true; break; }
+                }
+            }
+
+            // Visitor Counter Logic with Cooldown
+            if (foundPerson) {
+                container.classList.add('detected');
+                if (!isPersonPresent && personCooldown === 0) {
+                    visitorCount++;
+                    updateVisitorUI();
+                    playAlertSound();
+                    isPersonPresent = true;
+                }
+                personCooldown = 30; // 30 frames of grace period
+            } else {
+                container.classList.remove('detected');
+                if (personCooldown > 0) personCooldown--;
+                if (personCooldown === 0) isPersonPresent = false;
+            }
+
+            // FPS Calculation
+            const endTime = performance.now();
+            const delay = endTime - startTime;
+            const fps = 1000 / delay;
+            fpsBadge.innerText = `FPS: ${Math.round(fps)}`;
+
+            input.dispose(); resized.dispose(); normalized.dispose(); output.dispose();
+            requestAnimationFrame(detect);
+        }
+
+        startApp();
+    </script>
+</body>
+</html>
